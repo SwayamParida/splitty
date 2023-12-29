@@ -1,0 +1,17 @@
+services:
+  nodebackend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    depends_on:
+      - mongodb
+  mongodb:
+    volumes:
+      - splitty_db:/data/db
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+volumes:
+  splitty_db:
