@@ -4,4 +4,4 @@ COPY ./package.json ./package.json
 COPY ./server.ts ./server.ts
 RUN yarn install
 EXPOSE 9000
-CMD ["node", "server.ts"]
+CMD ["ts-node", "server.ts"]
