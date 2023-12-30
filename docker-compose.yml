@@ -1,8 +1,11 @@
 services:
   nodebackend:
+    restart: always
     build:
-      context: ./backend
+      context: backend
       dockerfile: Dockerfile
+    volumes:
+      - ./backend:/app/dev
     ports:
       - "9000:9000"
     depends_on:

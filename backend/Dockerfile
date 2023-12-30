@@ -1,7 +1,14 @@
 FROM node:16
+
+WORKDIR /app/dev
+COPY package.json /app`
+COPY yarn.lock /app
+COPY tsconfig.json /app
+
 WORKDIR /app
-COPY ./package.json ./package.json
-COPY ./server.ts ./server.ts
 RUN yarn install
+
 EXPOSE 9000
-CMD ["ts-node", "server.ts"]
+
+WORKDIR /app/dev
+CMD ["npm", "run", "start:watch"]
