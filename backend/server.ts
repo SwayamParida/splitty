@@ -1,15 +1,20 @@
 // Library imports
+import { strict as assert } from "assert";
 import express, { Express, Request, Response } from "express";
 import { connect } from "mongoose";
 
 // Application models
 import UserModel, { User } from "./models/user.ts";
 import RelationshipModel, { Relationship } from "./models/relationship.ts";
+import TransactionModel, { Transaction } from "./models/transaction.ts";
+
+// Application services
+import * as validation from "./services/validation.ts";
 
 // DB connection details
 const port: number = 9000;
-const db_connection_string: string = "mongodb+srv://splitty.qqepqpo.mongodb.net/splitty?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority";
-const db_connection_credentials: string = "config/mongodb_user_cert.pem";
+const dbConnectionString: string = "mongodb+srv://splitty.qqepqpo.mongodb.net/splitty?authSource=%24external&authMechanism=MONGODB-X509&retryWrites=true&w=majority";
+const dbConnectionCredentials: string = "config/mongodb_user_cert.pem";
 
 // Express configuration
 const app: Express = express();
@@ -22,7 +27,7 @@ app.get("/users", async (req: Request, res: Response) => {
 
 app.post("/users", async (req: Request, res: Response) => {
 	try {
-		let newUser: User = new UserModel(req.body);
+		let newUser = new UserModel(req.body);
 		newUser = await newUser.save();
 		res.status(201).send({userId: newUser._id});
 	} 
@@ -32,19 +37,50 @@ app.post("/users", async (req: Request, res: Response) => {
 	}
 });
 
+app.get("/users/:userId/friends", async (req: Request, res: Response) => {
+	try {
+		const { userId } = req.params;
+		// Validate that user exists
+		if (!await validation.isUserValid(userId)) {
+			res.status(400).send("Specified user does not exist");
+			return;
+		}
+		
+		// Fetch all friendships involving user
+		const user = await UserModel.findById(userId);
+		const friends: User[] | undefined = await user?.getFriends();
+		res.status(200).send(friends);
+	} catch (error) {
+		console.error(error);
+		res.status(400).send(error);
+	}
+});
+
 app.post("/users/:userId/friends/:friendUserId", async (req: Request, res: Response) => {
 	try {
 		const { userId, friendUserId } = req.params;
 		// Validate that both users exist
-		const userA: User | null = await UserModel.findById(userId).exec();
-		const userB: User | null = await UserModel.findById(friendUserId).exec();
-		if (!userA || !userB)
+		const isUserValid: boolean = await validation.isUserValid(userId);
+		const isFriendValid: boolean = await validation.isUserValid(friendUserId);
+		if (!isUserValid || !isFriendValid) {
 			res.status(400).send("User IDs specified are invalid");
+			return;
+		}
+
+		// Validate that users aren't already friends
+		const userA: User | null = await UserModel.findById(userId);
+		const userB: User | null = await UserModel.findById(friendUserId);
+		assert(userA && userB);
+		if (await validation.areUsersFriends(userA, userB)) {
+			res.status(400).send("Specified users are already friends");
+			return;
+		}
 
 		// Record relationship in DB
 		const newRelationship: Relationship = new RelationshipModel({
-			friendA: userA?._id,
-			friendB: userB?._id
+			friendA: userA,
+			friendB: userB,
+			dateAdded: new Date(),
 		});
 		await newRelationship.save();
 		res.status(201).send();
@@ -54,8 +90,84 @@ app.post("/users/:userId/friends/:friendUserId", async (req: Request, res: Respo
 	}
 });
 
+app.get("/users/:userId/friends/:friendUserId/transactions", async (req: Request, res: Response) => {
+	try {
+		const { userId, friendUserId } = req.params;
+
+		// Validate that both users exist
+		const isUserValid: boolean = await validation.isUserValid(userId);
+		const isFriendValid: boolean = await validation.isUserValid(friendUserId);
+		if (!isUserValid || !isFriendValid) {
+			res.status(400).send("User IDs specified are invalid");
+			return;
+		}
+
+		// Validate that users are friends
+		const userA: User | null = await UserModel.findById(userId);
+		const userB: User | null = await UserModel.findById(friendUserId);
+		assert(userA && userB);
+		if (!await validation.areUsersFriends(userA, userB)) {
+			res.status(400).send("Specified users must be friends before they can have transactions");
+			return;
+		}
+
+		// Fetch transactions from DB
+		const relationship: Relationship = await RelationshipModel.findRelationship(userA, userB);
+		const transactions: Transaction[] = await TransactionModel
+			.find({relationship: relationship._id})
+			.select("-relationship -__v")
+			.populate("debtor creditor poster", "-__v");
+		res.status(200).send(transactions);
+	} catch (error) {
+		console.error(error);
+		res.status(400).send(error);
+	}
+});
+
+app.post("/users/:userId/friends/:friendUserId/transactions", async (req: Request, res: Response) => {
+	try {
+		const { userId, friendUserId } = req.params;
+		const { amount, dateTransacted, memo } = req.body;
+
+		// Validate that both users exist
+		const isUserValid: boolean = await validation.isUserValid(userId);
+		const isFriendValid: boolean = await validation.isUserValid(friendUserId);
+		if (!isUserValid || !isFriendValid) {
+			res.status(400).send("User IDs specified are invalid");
+			return;
+		}
+
+		// Validate that users are friends
+		const userA: User | null = await UserModel.findById(userId);
+		const userB: User | null = await UserModel.findById(friendUserId);
+		assert(userA && userB);
+		if (!await validation.areUsersFriends(userA, userB)) {
+			res.status(400).send("Specified users must be friends to transact");
+			return;
+		}
+
+		// Record transaction in DB
+		const newTransaction: Transaction = new TransactionModel({
+			relationship: (await RelationshipModel.findRelationship(userA, userB))._id,
+			creditor: userA._id,
+			debtor: userB._id,
+			poster: userA._id,
+			amount: amount,
+			dateAdded: new Date(),
+			dateLastEdited: new Date(),
+			dateTransacted: dateTransacted,
+			memo: memo
+		});
+		await newTransaction.save();
+		res.status(201).send();
+	} catch (error) {
+		console.error(error);
+		res.status(400).send(error);
+	}
+});
+
 // Initialize DB connection and Express server
-connect(db_connection_string, {tlsCertificateKeyFile: db_connection_credentials})
+connect(dbConnectionString, {tlsCertificateKeyFile: dbConnectionCredentials})
 	.then(
 		() => {
 			app.listen(port, () => {
